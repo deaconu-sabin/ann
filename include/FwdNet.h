@@ -33,11 +33,12 @@ public:
 
 	double getError() const;
 	void dump();
+	void saveGraph(std::string fileName);
 
 protected:
 	void feedForward(const InputData& inputs);
 	void propagateBack(const TargetData& targets);
-	double calculateRootMeanSquareErr(const TargetData& targets);
+	double calculateMeanSquaredErr(const TargetData& targets);
 
 private:
 	struct Layer

@@ -7,10 +7,13 @@
 
 #include <cmath>
 #include <cassert>
+#include <fstream>
+
 #include <FwdNet.h>
 #include <Log.h>
-
 #include <Neuron.h>
+
+#define MAX_ITERETION 10000
 
 namespace ann {
 
@@ -22,8 +25,8 @@ FwdNet::Layer::Layer(unsigned neuronsNo):
 		neurons.push_back(new Neuron());
 		DEBUG("  created Neuron " << neurons.back());
 	}
-	DEBUG("  created Bias ");
 	bias = new Neuron();
+	DEBUG("  created Bias " << bias);
 }
 
 void FwdNet::Layer::dump()
@@ -33,13 +36,16 @@ void FwdNet::Layer::dump()
 		std::cout<<"  Neuron["<<neurons[neuronIdx]<<"]: "<< *(neurons[neuronIdx]);
 	}
 	// log bias info
-	std::cout<<"  Bias["<<bias<<"]: "<< *bias<<"\n";
+	if(bias)
+	{
+		std::cout<<"  Bias["<<bias<<"]: "<< *bias<<"\n";
+	}
 }
 
 FwdNet::FwdNet(const Topology &topology):
 		m_error(47.0),
-		m_eta(0.3),
-		m_alpha(0.2),
+		m_eta(0.25),
+		m_alpha(0.3),
 		m_isTrained(false)
 {
 	unsigned nLayers = topology.size();
@@ -52,7 +58,7 @@ FwdNet::FwdNet(const Topology &topology):
 	{
 		DEBUG("Creating layer "<< layerIdx);
 		Layer layer(topology[layerIdx]);
-		Layer& prevLayer =  m_layers[layerIdx-1];
+		Layer& prevLayer =  m_layers.back();
 
 		for(unsigned neuronIdx = 0;
 			neuronIdx < layer.neurons.size();
@@ -63,10 +69,20 @@ FwdNet::FwdNet(const Topology &topology):
 				++neuronPrevLayer)
 			{
 				layer.neurons[neuronIdx]->connectTo(prevLayer.neurons[neuronPrevLayer]);
+				INFO(layer.neurons[neuronIdx] << " connect to " << prevLayer.neurons[neuronPrevLayer]);
 			}
-			layer.neurons[neuronIdx]->connectTo(prevLayer.bias);
+			if(NULL != prevLayer.bias)
+			{
+				layer.neurons[neuronIdx]->connectTo(prevLayer.bias);
+				INFO(layer.neurons[neuronIdx] << " connect to " << prevLayer.bias);
+			}
 		}
-		m_layers.push_back(layer);
+		if(NULL != prevLayer.bias)
+		{
+			prevLayer.bias->setOutput(1.0);
+			prevLayer.bias->notifyObservers();
+		}
+			m_layers.push_back(layer);
 	}
 }
 
@@ -93,8 +109,7 @@ void FwdNet::doTraining(const TrainingDataSet& trainingDataSet , double accepted
 
 			DEBUG("Feeding forward the " << trainingDataIdx << "th trainingData");
 			feedForward(inputData);
-
-			if(calculateRootMeanSquareErr(targetData) > acceptedError )
+			if(calculateMeanSquaredErr(targetData) > acceptedError )
 			{
 				m_isTrained = false;
 			}
@@ -102,11 +117,11 @@ void FwdNet::doTraining(const TrainingDataSet& trainingDataSet , double accepted
 			{
 				epochError = m_error;
 			}
-			DEBUG("For TrainingData["<<trainingDataIdx<<"]; RMS Error = " << epochError);
+			DEBUG("For TrainingData["<<trainingDataIdx<<"]; MS Error = " << epochError);
 			propagateBack(targetData);
 		}
-		INFO("For Epoch "<< std::setw(5)<<std::right<< epochCounter++ <<" error is "<<  epochError);
-	}while( !m_isTrained && epochCounter < 300 );
+		INFO("For Epoch "<< std::setw(5)<<std::right<< epochCounter++ <<"  error is "<<  epochError);
+	}while( !m_isTrained && epochCounter < MAX_ITERETION );
 	INFO("Training finished.");
 }
 void FwdNet::feedForward(const InputData& inputs)
@@ -116,7 +131,12 @@ void FwdNet::feedForward(const InputData& inputs)
 	for(unsigned i = 0; i < inputs.size(); ++i)
 	{
 		m_layers[0].neurons[i]->setOutput(inputs[i]);
-		DEBUG("  output of Layer[0] Neuron ["<<m_layers[0].neurons[i]<<"] = " << m_layers[0].neurons[i]->getOutput());
+		m_layers[0].neurons[i]->notifyObservers();
+	}
+	if(NULL != m_layers[0].bias)
+	{
+		m_layers[0].bias->setOutput(1.0);
+		m_layers[0].bias->notifyObservers();
 	}
 
 	//feed forward. start from second layer (not with the inputLayer)
@@ -125,8 +145,14 @@ void FwdNet::feedForward(const InputData& inputs)
 		for(unsigned neuronIdx = 0; neuronIdx < m_layers[layer].neurons.size(); ++neuronIdx )
 		{
 			Neuron* currentNeuron = m_layers[layer].neurons[neuronIdx];
-			currentNeuron->calculateOutput();
-			DEBUG("  output of Layer["<<layer<<"] Neuron ["<<currentNeuron<<"] = " << currentNeuron->getOutput());
+			double sum = currentNeuron->addConnectionInputs();
+			currentNeuron->activate(sum);
+			currentNeuron->notifyObservers();
+		}
+		if(NULL != m_layers[layer].bias)
+		{
+			m_layers[layer].bias->setOutput(1.0);
+			m_layers[layer].bias->notifyObservers();
 		}
 	}
 }
@@ -140,8 +166,8 @@ void FwdNet::propagateBack(const TargetData& targets)
 	{
 		Neuron* neuron = outputLayer.neurons[neuronIdx];
 		double neuronOutput = neuron->getOutput();
-		double delta = targets[neuronIdx] - neuronOutput;
-		neuron->setGradient( delta * neuron->activateDerivativeFunction(neuronOutput));
+		double errorDerivative = targets[neuronIdx] - neuronOutput;
+		neuron->setGradient( errorDerivative * neuron->activateDerivative(neuron->addConnectionInputs()));
 	}
 
 	/// calculate the hidden layer gradients
@@ -152,23 +178,16 @@ void FwdNet::propagateBack(const TargetData& targets)
 		for(unsigned neuronIdx = 0; neuronIdx < hiddenLayer.neurons.size(); ++neuronIdx)
 		{
 			Neuron* neuron = hiddenLayer.neurons[neuronIdx];
-			double neuronOutput = neuron->getOutput();
+			//double neuronOutput = neuron->getOutput();
 			double sum = 0.0;
 
 			for(unsigned i = 0; i < nextLayer.neurons.size(); ++i)
 			{
-				sum += nextLayer.neurons[i]->getConnectionErrorWith(neuron);
+				sum += nextLayer.neurons[i]->getConnectionWith(neuron)->getWeight() *
+					   nextLayer.neurons[i]->getGradient();
 			}
-			neuron->setGradient(sum * neuron->activateDerivativeFunction(neuronOutput));
+			neuron->setGradient(sum * neuron->activateDerivative(neuron->addConnectionInputs()));
 		}
-
-		// calculate layer's bias gradient
-		double sum = 0.0;
-		for(unsigned i = 0; i < nextLayer.neurons.size(); ++i)
-		{
-			sum += nextLayer.neurons[i]->getConnectionErrorWith(hiddenLayer.bias);
-		}
-		hiddenLayer.bias->setGradient(sum * hiddenLayer.bias->activateDerivativeFunction(hiddenLayer.bias->getOutput()));
 	}
 
 	/// update connection weights
@@ -182,23 +201,28 @@ void FwdNet::propagateBack(const TargetData& targets)
 			{
 				Neuron* prevNeuron = prevLayer.neurons[i];
 
-				double deltaWeight = neuron->getConnectionDeltaWeightWith(prevNeuron);
+				double deltaWeight = neuron->getConnectionWith(prevNeuron)->getDeltaWeight();
 
-				double newDeltaWeight = m_eta * prevNeuron->getOutput() * neuron->getGradient()  +  // input from prevNeuron
+				double newDeltaWeight = m_eta * prevNeuron->getOutput() * neuron->getGradient() +  // input from prevNeuron
 										m_alpha * deltaWeight;  // a fraction of the previous delta weight
 
-				neuron->setConnectionDeltaWeightWith(prevNeuron, newDeltaWeight);
-				neuron->setConnectionWeightWith(prevNeuron, neuron->getConnectionWeightWith(prevNeuron)+newDeltaWeight);
+				neuron->getConnectionWith(prevNeuron)->updateDeltaWeight(newDeltaWeight);
+				neuron->getConnectionWith(prevNeuron)->updateWeight(
+						neuron->getConnectionWith(prevNeuron)->getWeight()+ newDeltaWeight);
 			}
 
 			//update bias of previous layer
-			double deltaWeight = neuron->getConnectionDeltaWeightWith(prevLayer.bias);
+			//double deltaWeight = neuron->getConnectionDeltaWeightWith(prevLayer.bias);
+			if(NULL != prevLayer.bias)
+			{
+				double deltaWeight = neuron->getConnectionWith(prevLayer.bias)->getDeltaWeight();
+				double newDeltaWeight = m_eta * prevLayer.bias->getOutput() * neuron->getGradient() + // input from prevNeuron
+									    m_alpha * deltaWeight;  // a fraction of the previous delta weight
 
-			double newDeltaWeight = m_eta * prevLayer.bias->getOutput() * neuron->getGradient() +  // input from prevNeuron
-									m_alpha * deltaWeight;  // a fraction of the previous delta weight
-
-			neuron->setConnectionDeltaWeightWith(prevLayer.bias, newDeltaWeight);
-			neuron->setConnectionWeightWith(prevLayer.bias, neuron->getConnectionWeightWith(prevLayer.bias)+newDeltaWeight);
+				neuron->getConnectionWith(prevLayer.bias)->updateDeltaWeight(newDeltaWeight);
+				neuron->getConnectionWith(prevLayer.bias)->updateWeight(
+						neuron->getConnectionWith(prevLayer.bias)->getWeight() + newDeltaWeight);
+			}
 		}
 	}
 }
@@ -209,7 +233,7 @@ void FwdNet::getOutputs(OutputData& outputs)
 
 	for(unsigned outputNeuronIdx = 0; outputNeuronIdx < outputLayer.neurons.size(); ++outputNeuronIdx)
 	{
-		outputs.push_back(outputLayer.neurons[outputNeuronIdx]->calculateOutput());
+		outputs.push_back(outputLayer.neurons[outputNeuronIdx]->getOutput());
 		INFO(" -->Output["<<outputNeuronIdx<<"] = "<< outputLayer.neurons[outputNeuronIdx]->getOutput());
 	}
 }
@@ -221,7 +245,6 @@ double FwdNet::getError() const
 
 void FwdNet::dump()
 {
-
 	for(unsigned layer = 0; layer < m_layers.size(); ++layer)
 	{
 		std::cout<<"FwdNet: Layers "<< layer+1 << " / " << m_layers.size()<<"\n";
@@ -229,21 +252,102 @@ void FwdNet::dump()
 	}
 	std::cout<<"FwdNet::dump() ended\n";
 }
-double FwdNet::calculateRootMeanSquareErr(const TargetData& targets)
+
+void FwdNet::saveGraph(std::string fileName)
+{
+	std::ofstream outFile(fileName.c_str(), std::ios_base::out | std::ios_base::trunc);
+
+	outFile << "digraph g {\n";
+	for(unsigned layerIdx = 1; layerIdx < m_layers.size(); ++layerIdx)
+	{
+		for(unsigned neuronIdx = 0; neuronIdx < m_layers[layerIdx].neurons.size(); ++neuronIdx)
+		{
+			for(unsigned prevNeuronIdx = 0; prevNeuronIdx < m_layers[layerIdx-1].neurons.size(); ++prevNeuronIdx)
+			{
+					//write node
+				outFile << std::setprecision(3) << std::setw(5)<< std::setfill(' ')
+						<<"\t\""
+						<< m_layers[layerIdx-1].neurons[prevNeuronIdx]
+						<<"\" [label=\""
+						<<m_layers[layerIdx-1].neurons[prevNeuronIdx]
+						<<"\\n out="
+						<< m_layers[layerIdx-1].neurons[prevNeuronIdx]->getOutput()
+						<<"\"];"<<std::endl;
+						// write connection
+				outFile << "\t\""
+						<< m_layers[layerIdx-1].neurons[prevNeuronIdx]
+						<<"\" -> \""
+						<< m_layers[layerIdx].neurons[neuronIdx]
+						<< "\" [label=\""
+						<< *(m_layers[layerIdx].neurons[neuronIdx]->getConnectionWith(m_layers[layerIdx-1].neurons[prevNeuronIdx]))
+						<<"\"];" << std::endl;
+			}
+			if( NULL != m_layers[layerIdx-1].bias)
+			{
+				outFile <<"\t\""
+						<< m_layers[layerIdx-1].bias
+						<<"\" [label=\"bias\\n out="
+						<< m_layers[layerIdx-1].bias->getOutput()
+						<<"\"];"
+						<< std::endl;
+
+				outFile <<"\t\""
+						<< m_layers[layerIdx-1].bias
+						<<"\" -> \""
+						<< m_layers[layerIdx].neurons[neuronIdx]
+						<< "\" [label=\""
+						<< *(m_layers[layerIdx].neurons[neuronIdx]->getConnectionWith(m_layers[layerIdx-1].bias))
+						<<"\"];" << std::endl;
+			}
+		}
+		outFile <<"\t { rank=same; ";
+		for(unsigned prevNeuronIdx = 0; prevNeuronIdx < m_layers[layerIdx-1].neurons.size(); ++prevNeuronIdx)
+		{
+			outFile << "\""
+					<< m_layers[layerIdx-1].neurons[prevNeuronIdx]
+			        << "\" ";
+		}
+		if( NULL != m_layers[layerIdx-1].bias)
+		{
+			outFile <<"\""
+					<<m_layers[layerIdx-1].bias
+					<<"\" ";
+		}
+		outFile	<<"}\n";
+	}
+
+	for(unsigned outputNeuronIdx = 0; outputNeuronIdx < m_layers.back().neurons.size(); ++outputNeuronIdx)
+	{
+			//write node
+		outFile << std::setprecision(3) << std::setw(5)
+				<<"\t\""
+				<< m_layers.back().neurons[outputNeuronIdx]
+				<<"\" [label=\""
+				<<m_layers.back().neurons[outputNeuronIdx]
+				<<"\\n out="
+				<< m_layers.back().neurons[outputNeuronIdx]->getOutput()
+				<<"\"];"<<std::endl;
+	}
+	outFile << "}" << std::endl;
+	outFile.close();
+
+}
+
+
+double FwdNet::calculateMeanSquaredErr(const TargetData& targets)
 {
 	assert(targets.size() == m_layers.back().neurons.size());
 	Layer& outputLayer = m_layers.back();
 	m_error = 0;
-	/// calculate the error; use root mean square
+	// calculate the mean square error
 	for(unsigned neuronIdx = 0; neuronIdx < outputLayer.neurons.size(); ++neuronIdx)
 	{
-		double delta = targets[neuronIdx] - outputLayer.neurons[neuronIdx]->calculateOutput();
-		m_error += delta * delta;
+		double delta = targets[neuronIdx] - outputLayer.neurons[neuronIdx]->getOutput();
+		m_error += (delta * delta);
 	}
 	m_error /= outputLayer.neurons.size();
-	m_error = sqrt(m_error);  // root mean square
 
-	DEBUG(" -->RMSE = "<<m_error);
+	DEBUG(" -->MSE = "<<m_error);
 	return m_error;
 }
 

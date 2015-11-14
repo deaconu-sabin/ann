@@ -1,4 +1,5 @@
-changing neuronConnection from list to map
-adding connection.cpp
-adding Observer pattern
+refactoring
+    changing neuronConnection from list to map
+    adding connection.cpp
+    adding Observer pattern
 adding feature to save network into the graph file

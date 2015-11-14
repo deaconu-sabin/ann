@@ -21,28 +21,29 @@ int main( int argc, char** argv)
 	ann::FwdNet::InputData inputs(2);
 	ann::FwdNet::TargetData targets(1);
 
-	inputs[0]=0;
-	inputs[1]=0;
-	targets[0]=0;
+	inputs[0]=0.0;
+	inputs[1]=0.0;
+	targets[0]=0.0;
 	trainingDataSet.push_back(std::make_pair(inputs, targets));
 
-	inputs[0]=0;
-	inputs[1]=1;
-	targets[0]=1;
+	inputs[0]=1.0;
+	inputs[1]=1.0;
+	targets[0]=0.0;
 	trainingDataSet.push_back(std::make_pair(inputs, targets));
 
-	inputs[0]=1;
-	inputs[1]=0;
-	targets[0]=1;
+	inputs[0]=0.0;
+	inputs[1]=1.0;
+	targets[0]=1.0;
 	trainingDataSet.push_back(std::make_pair(inputs, targets));
 
-	inputs[0]=1;
-	inputs[1]=1;
-	targets[0]=0;
+	inputs[0]=1.0;
+	inputs[1]=0.0;
+	targets[0]=1.0;
 	trainingDataSet.push_back(std::make_pair(inputs, targets));
 
+	artificialNetwork.doTraining(trainingDataSet, 0.001);
 
-	artificialNetwork.doTraining(trainingDataSet, 0.1);
+	artificialNetwork.saveGraph(std::string("FwdNet.gv"));
 
 	ann::FwdNet::OutputData outputs;
 	inputs[0]=0;
@@ -64,8 +65,8 @@ int main( int argc, char** argv)
 	inputs[1]=1;
 	artificialNetwork.processInputs(inputs);
 	artificialNetwork.getOutputs(outputs);
+	//artificialNetwork.dump();
 
-	artificialNetwork.dump();
 	return 0;
 }
 
