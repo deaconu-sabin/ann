@@ -30,7 +30,7 @@ std::ostream& operator<<(std::ostream& output, const ann::Neuron::Connection& ob
 {
 	output	<< obj.m_value
 			<<"\\n"
-			<<	obj.m_weight
+			<<obj.m_weight
 			<<"\\n"
 			<<obj.m_deltaWeight;
 	return output;
